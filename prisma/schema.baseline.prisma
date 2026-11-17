@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id               Int              @id @default(autoincrement())
+  name             String
+  email            String           @unique
+  phone            String?
+  passwordHash     String
+  role             String           @default("customer")
+  status           String           @default("active")
+  createdAt        DateTime         @default(now())
+  address          String?
+  availability     Availability[]
+  customerBookings Booking[]        @relation("CustomerBookings")
+  providerBookings Booking[]        @relation("ProviderBookings")
+  notifications    Notification[]
+  payouts          Payout[]
+  providerProfile  ProviderProfile?
+  reviewsWritten   Review[]         @relation("ReviewsWritten")
+  reviewsReceived  Review[]         @relation("ReviewsReceived")
+  services         Service[]
+}
+
+model Category {
+  id        Int               @id @default(autoincrement())
+  name      String            @unique
+  icon      String?
+  isActive  Boolean           @default(true)
+  providers ProviderProfile[]
+  services  Service[]
+}
+
+model ProviderProfile {
+  id              Int      @id @default(autoincrement())
+  userId          Int      @unique
+  categoryId      Int
+  city            String
+  experienceYears Int      @default(0)
+  bio             String?
+  ratingAvg       Float    @default(0)
+  category        Category @relation(fields: [categoryId], references: [id])
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Service {
+  id          Int       @id @default(autoincrement())
+  providerId  Int
+  categoryId  Int
+  title       String
+  description String?
+  price       Int
+  durationMin Int
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  bookings    Booking[]
+  category    Category  @relation(fields: [categoryId], references: [id])
+  provider    User      @relation(fields: [providerId], references: [id], onDelete: Cascade)
+}
+
+model Booking {
+  id          Int      @id @default(autoincrement())
+  customerId  Int
+  providerId  Int
+  serviceId   Int
+  scheduledAt DateTime
+  address     String
+  notes       String?
+  total       Int
+  status      String   @default("pending")
+  createdAt   DateTime @default(now())
+  customer    User     @relation("CustomerBookings", fields: [customerId], references: [id])
+  provider    User     @relation("ProviderBookings", fields: [providerId], references: [id])
+  service     Service  @relation(fields: [serviceId], references: [id])
+  payment     Payment?
+  review      Review?
+}
+
+model Review {
+  id         Int      @id @default(autoincrement())
+  bookingId  Int      @unique
+  customerId Int
+  providerId Int
+  rating     Int
+  comment    String?
+  createdAt  DateTime @default(now())
+  booking    Booking  @relation(fields: [bookingId], references: [id])
+  customer   User     @relation("ReviewsWritten", fields: [customerId], references: [id])
+  provider   User     @relation("ReviewsReceived", fields: [providerId], references: [id])
+}
+
+model Payment {
+  id        Int       @id @default(autoincrement())
+  bookingId Int       @unique
+  amount    Int
+  status    String    @default("created")
+  orderId   String    @unique
+  txnId     String?
+  createdAt DateTime  @default(now())
+  paidAt    DateTime?
+  booking   Booking   @relation(fields: [bookingId], references: [id])
+}
+
+model Availability {
+  id         Int     @id @default(autoincrement())
+  providerId Int
+  dayOfWeek  Int
+  startTime  String
+  endTime    String
+  isActive   Boolean @default(true)
+  provider   User    @relation(fields: [providerId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, dayOfWeek])
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  title     String
+  message   String
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+}
+
+model Payout {
+  id         Int      @id @default(autoincrement())
+  providerId Int
+  amount     Int
+  reference  String?
+  createdAt  DateTime @default(now())
+  provider   User     @relation(fields: [providerId], references: [id])
+
+  @@index([providerId])
+}
+
+model Setting {
+  key   String @id
+  value String
+}

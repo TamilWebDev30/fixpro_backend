@@ -97,15 +97,52 @@ model Review {
 }
 
 model Payment {
-  id        Int       @id @default(autoincrement())
-  bookingId Int       @unique
-  amount    Int
-  status    String    @default("created")
-  orderId   String    @unique
-  txnId     String?
-  createdAt DateTime  @default(now())
-  paidAt    DateTime?
-  booking   Booking   @relation(fields: [bookingId], references: [id])
+  id         Int       @id @default(autoincrement())
+  bookingId  Int       @unique
+  amount     Int
+  paidAmount Int       @default(0)
+  status     String    @default("created")
+  orderId    String    @unique
+  txnId      String?
+  createdAt  DateTime  @default(now())
+  paidAt     DateTime?
+
+  booking      Booking              @relation(fields: [bookingId], references: [id])
+  transactions PaymentTransaction[]
+  requests     PaymentRequest[]
+}
+
+model PaymentRequest {
+  id          Int       @id @default(autoincrement())
+  paymentId   Int
+  reference   String    @unique
+  amount      Int
+  status      String    @default("created")
+  createdAt   DateTime  @default(now())
+  submittedAt DateTime?
+
+  payment     Payment             @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  transaction PaymentTransaction?
+
+  @@index([paymentId, status])
+}
+
+model PaymentTransaction {
+  id               Int       @id @default(autoincrement())
+  paymentId        Int
+  paymentRequestId Int?      @unique
+  txnId            String    @unique
+  amount           Int
+  verifiedAmount   Int?
+  status           String    @default("submitted")
+  adminRemarks     String?
+  createdAt        DateTime  @default(now())
+  verifiedAt       DateTime?
+
+  payment        Payment         @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  paymentRequest PaymentRequest? @relation(fields: [paymentRequestId], references: [id], onDelete: SetNull)
+
+  @@index([paymentId, status])
 }
 
 model Availability {
