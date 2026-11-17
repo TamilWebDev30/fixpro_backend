@@ -1,5 +1,6 @@
 
 const router = require('express').Router();
+
 const ctrl = require('../controllers/payment.controller');
 const auth = require('../middleware/auth');
 const { requireRole } = require('../middleware/role');
@@ -7,7 +8,7 @@ const { requireRole } = require('../middleware/role');
 const wrap = (fn) => (req, res, next) =>
   Promise.resolve(fn(req, res, next)).catch(next);
 
-// Admin verifies the payment after checking the bank account.
+// Admin verifies payment after checking bank account.
 router.post(
   '/admin/verify',
   auth,
