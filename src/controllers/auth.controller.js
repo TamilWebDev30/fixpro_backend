@@ -10,7 +10,7 @@ const registerSchema = z.object({
   email: z.string().email(),
   phone: z.string().min(10).optional(),
   password: z.string().min(6),
-  role: z.enum(['customer', 'provider']), // admin can never self-register
+  role: z.enum(['customer', 'provider']),
 });
 
 const loginSchema = z.object({
@@ -34,7 +34,9 @@ const signToken = (u) =>
     { expiresIn: '7d' }
   );
 
+// ==========================================
 // REGISTER
+// ==========================================
 exports.register = async (req, res) => {
   const parsed = registerSchema.safeParse(req.body);
 
@@ -70,13 +72,15 @@ exports.register = async (req, res) => {
     },
   });
 
-  res.status(201).json({
+  return res.status(201).json({
     token: signToken(user),
     user: publicUser(user),
   });
 };
 
+// ==========================================
 // LOGIN
+// ==========================================
 exports.login = async (req, res) => {
   const parsed = loginSchema.safeParse(req.body);
 
@@ -104,13 +108,15 @@ exports.login = async (req, res) => {
     });
   }
 
-  res.json({
+  return res.json({
     token: signToken(user),
     user: publicUser(user),
   });
 };
 
+// ==========================================
 // CURRENT USER
+// ==========================================
 exports.me = async (req, res) => {
   const user = await prisma.user.findUnique({
     where: { id: req.user.id },
@@ -122,12 +128,17 @@ exports.me = async (req, res) => {
     });
   }
 
-  res.json({
+  return res.json({
     user: publicUser(user),
   });
 };
 
+// ==========================================
 // FORGOT PASSWORD
+// ==========================================
+// User enters registered email.
+// No SMTP and no reset link.
+// Admin provides the recovery code separately.
 exports.forgotPassword = async (req, res) => {
   const parsed = z.object({
     email: z.string().email(),
@@ -135,7 +146,7 @@ exports.forgotPassword = async (req, res) => {
 
   if (!parsed.success) {
     return res.status(400).json({
-      message: 'Please enter a valid email address',
+      message: 'Please enter a valid email address.',
     });
   }
 
@@ -145,38 +156,74 @@ exports.forgotPassword = async (req, res) => {
     where: { email },
   });
 
-  const isDevelopment = process.env.NODE_ENV !== 'production';
+  // Avoid revealing whether an email is registered.
+  return res.json({
+    message: user
+      ? 'If your account exists, contact Admin to obtain a recovery code.'
+      : 'If your account exists, contact Admin to obtain a recovery code.',
+  });
+};
 
-  const responseMessage =
-    'If an account exists with this email, a reset link has been generated.';
-
-  if (!user) {
-    return res.json({
-      message: responseMessage,
-      ...(isDevelopment ? { resetUrl: null } : {}),
+// ==========================================
+// ADMIN GENERATES RECOVERY CODE
+// ==========================================
+exports.generateRecoveryCode = async (req, res) => {
+  // Only Admin can generate recovery codes.
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({
+      message: 'Only Admin can generate recovery codes.',
     });
   }
 
-  // Generate a cryptographically secure token.
-  const rawToken = crypto.randomBytes(32).toString('hex');
+  const parsed = z.object({
+    email: z.string().email(),
+  }).safeParse(req.body);
+
+  if (!parsed.success) {
+    return res.status(400).json({
+      message: 'Please enter a valid email address.',
+    });
+  }
+
+  const email = parsed.data.email.toLowerCase();
+
+  const user = await prisma.user.findUnique({
+    where: { email },
+  });
+
+  if (!user || !['customer', 'provider'].includes(user.role)) {
+    return res.status(404).json({
+      message: 'Customer or Provider account not found.',
+    });
+  }
+
+  // Generate an 8-character secure recovery code.
+  const recoveryCode = crypto
+    .randomBytes(16)
+    .toString('hex')
+    .toUpperCase();
 
   // Store only the SHA-256 hash.
   const tokenHash = crypto
     .createHash('sha256')
-    .update(rawToken)
+    .update(recoveryCode)
     .digest('hex');
 
-  // Token expires after 30 minutes.
-  const expiresAt = new Date(Date.now() + 30 * 60 * 1000);
+  const now = new Date();
 
-  // Invalidate previous unused tokens.
+  // Recovery code expires after 30 minutes.
+  const expiresAt = new Date(
+    now.getTime() + 30 * 60 * 1000
+  );
+
+  // Invalidate previously generated unused codes.
   await prisma.passwordResetToken.updateMany({
     where: {
       userId: user.id,
       usedAt: null,
     },
     data: {
-      usedAt: new Date(),
+      usedAt: now,
     },
   });
 
@@ -188,58 +235,68 @@ exports.forgotPassword = async (req, res) => {
     },
   });
 
-  // Do not expose reset links in production.
-  if (!isDevelopment) {
-    return res.json({
-      message: responseMessage,
-    });
-  }
-
-  const frontendUrl = (
-    process.env.FRONTEND_URL || 'http://localhost:4200'
-  ).replace(/\/$/, '');
-
-  const resetUrl =
-    `${frontendUrl}/#/auth/reset-password?token=${encodeURIComponent(rawToken)}`;
-
+  // Display raw code to Admin once.
   return res.json({
-    message: responseMessage,
-    resetUrl,
+    message: 'Recovery code generated successfully.',
+    email: user.email,
+    recoveryCode,
+    expiresAt,
   });
 };
 
+// ==========================================
 // RESET PASSWORD
+// ==========================================
+// Email + Recovery Code + New Password
 exports.resetPassword = async (req, res) => {
   const parsed = z.object({
-    token: z.string().min(1),
+    email: z.string().email(),
+    recoveryCode: z.string().min(1),
     password: z.string().min(6),
   }).safeParse(req.body);
 
   if (!parsed.success) {
     return res.status(400).json({
-      message: 'Invalid token or password. Password must contain at least 6 characters.',
+      message: 'Enter a valid email, recovery code and password with at least 6 characters.',
     });
   }
 
-  const { token, password } = parsed.data;
+  const {
+    email,
+    recoveryCode,
+    password,
+  } = parsed.data;
 
-  // Hash the received token before database lookup.
+  const normalizedEmail = email.toLowerCase();
+
   const tokenHash = crypto
     .createHash('sha256')
-    .update(token)
+    .update(recoveryCode.trim().toUpperCase())
     .digest('hex');
-
-  const now = new Date();
 
   const passwordHash = await bcrypt.hash(password, 10);
 
+  const now = new Date();
+
   const updated = await prisma.$transaction(async (tx) => {
+    const user = await tx.user.findUnique({
+      where: { email: normalizedEmail },
+    });
+
+    if (
+      !user ||
+      !['customer', 'provider'].includes(user.role)
+    ) {
+      return false;
+    }
+
     const resetToken = await tx.passwordResetToken.findUnique({
       where: { tokenHash },
     });
 
     if (
       !resetToken ||
+      resetToken.userId !== user.id ||
       resetToken.usedAt ||
       resetToken.expiresAt <= now
     ) {
@@ -247,14 +304,16 @@ exports.resetPassword = async (req, res) => {
     }
 
     await tx.user.update({
-      where: { id: resetToken.userId },
-      data: { passwordHash },
+      where: { id: user.id },
+      data: {
+        passwordHash,
+      },
     });
 
-    // Invalidate all unused reset tokens for this user.
+    // Mark all unused codes as used.
     await tx.passwordResetToken.updateMany({
       where: {
-        userId: resetToken.userId,
+        userId: user.id,
         usedAt: null,
       },
       data: {
@@ -267,11 +326,11 @@ exports.resetPassword = async (req, res) => {
 
   if (!updated) {
     return res.status(400).json({
-      message: 'Reset link is invalid or expired. Please request a new one.',
+      message: 'Invalid or expired recovery code. Please contact Admin for a new code.',
     });
   }
 
   return res.json({
-    message: 'Password has been reset successfully. Please log in.',
+    message: 'Password reset successfully. Please log in with your new password.',
   });
 };
